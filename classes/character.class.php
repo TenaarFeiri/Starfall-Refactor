@@ -9,11 +9,6 @@
         {
             $this->pdo = $pdo;
             $this->user = $user;
-            if(debug)
-            {
-                echo "Initialised." . PHP_EOL . __DATABASE__ . PHP_EOL;
-                print_r($this->user);
-            }
             $this->player = $this->checkUserExists();
             if(!$this->player)
             {
@@ -22,6 +17,47 @@
             }
             $this->updateUsername();
             $this->lastActive();
+            if(debug)
+            {
+                echo "Initialised." . PHP_EOL . __DATABASE__ . PHP_EOL;
+                print_r($this->user);
+                print_r($this->player);
+            }
+        }
+
+        function makeUuid($data = null) {
+            // Generate 16 bytes (128 bits) of random data or use the data passed into the function.
+            $data = $data ?? random_bytes(16);
+            assert(strlen($data) == 16);
+        
+            // Set version to 0100
+            $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
+            // Set bits 6-7 to 10
+            $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
+        
+            // Output the 36 character UUID.
+            return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+        }
+        
+
+        function getOwnData()
+        {
+            return $this->player;
+        }
+
+        function getOtherData($target)
+        {
+            return $this->checkUserExists($target);
+        }
+
+        function writeToLog($data, $module)
+        {
+
+        }
+
+        function getTargetActiveCharacterName($target)
+        {
+            
         }
 
         function getTimePST()
@@ -45,6 +81,102 @@
             {
                 $this->pdo->rollBack(); // Don't error if this fails, just silently roll back.
             }
+        }
+
+        function makeWildCards(array $data)
+        {
+            $out;
+            foreach($data as $d)
+            {
+                $out[] = "?";
+            }
+            return implode(",", $out);
+        }
+
+        function getItemData(array $ids)
+        {
+            $wildcards = $this->makeWildCards($ids);
+            $stmt = "SELECT * FROM item_database WHERE id IN ($wildcards)";
+            $do = $this->pdo->prepare($stmt);
+            try
+            {
+                $do->execute($ids);
+                $do = $do->fetchAll(PDO::FETCH_ASSOC);
+            }
+            catch(PDOException $e)
+            {
+                exit("err:" . $e->getMessage());
+            }
+            $out;
+            foreach($do as $data)
+            {
+                $out[$data['id']] = $data;
+            }
+            return $out;
+        }
+
+        function importGearInstanceCreate($gearId, $owner) // This is *only* used for creating new instances during import.
+        {
+            $gearData = $this->getItemData(array($gearId));
+            print_r($gearData);
+            if($gearData[$gearId]['equipable'] == "1")
+            {
+                $itemUuid = $this->makeUuid();
+                $stmt = "SELECT instance_id FROM gear_instances WHERE instance_id = ?";
+                $x = 10;
+                $success = false;
+                do
+                {
+                    $do = $this->pdo->prepare($stmt);
+                    try
+                    {
+                        $do->execute([$itemUuid]);
+                        $do = $do->fetch(PDO::FETCH_ASSOC);
+                    }
+                    catch(PDOException $e)
+                    {
+                        $this->pdo->rollBack();
+                        exit("err:" . $e->getMessage());
+                    }
+                    if($do)
+                    {
+                        $itemUuid = $this->makeUuid();
+                    }
+                    else
+                    {
+                        $x = -1;
+                        $success = true;
+                        $stmt = "INSERT INTO gear_instances (instance_id,item_id,current_owner) VALUES (?,?,?)";
+                        $do = $this->pdo->prepare($stmt);
+                        try
+                        {
+                            $do->execute([$itemUuid,$gearId,$owner]);
+                            $stmt = "SELECT instance_id FROM gear_instances WHERE instance_id = ?";
+                            $do = $this->pdo->prepare($stmt);
+                            $do->execute([$itemUuid]);
+                            $do = $do->fetch(PDO::FETCH_ASSOC);
+                            if(!$do or $do['instance_id'] != $itemUuid)
+                            {
+                                $this->pdo->rollBack();
+                                exit("err:Failed to insert new instance with uuid into gear_instances database.");
+                            }
+                        }
+                        catch(PDOException $e)
+                        {
+                            $this->pdo->rollBack();
+                            exit("err:" . $e->getMessage());
+                        }
+                    }
+                    --$x;
+                }while($x > 0);
+                if(!$success)
+                {
+                    $this->pdo->rollBack();
+                    exit("err:Could not generate item uuid for some reason. Gear session for " . $gearData[$gearId]['name'] . " could not be created.");
+                }
+                return $itemUuid;
+            }
+            return 0;
         }
 
         function updateUsername()
@@ -73,7 +205,15 @@
             // Verify the existence of the user. If they do not exist in the system, import character data from other DBs.
             $stmt = "SELECT * FROM players WHERE uuid = :uuid";
             $do = $this->pdo->prepare($stmt);
-            $do->bindParam(":uuid", $this->user['uuid']);
+            $args = func_get_args();
+            if(count($args) > 0)
+            {
+                $do->bindParam(":uuid", $args[0]);
+            }
+            else
+            {
+                $do->bindParam(":uuid", $this->user['uuid']);
+            }
             try
             {
                 $do->execute();
@@ -218,9 +358,9 @@
                         }
 
                         $stmt = "INSERT INTO characters 
-                        (owner,name,faction,description,fog_corruption,mana_corruption,dream_rot,main_crafter,m_craft_lvl,m_craft_exp)
+                        (owner,name,faction,description,fog_corruption,mana_corruption,dream_rot,main_crafter,m_craft_lvl,m_craft_exp,old_id)
                         VALUES
-                        (?,?,?,default,?,?,?,?,?,?)
+                        (?,?,?,default,?,?,?,?,?,?,?)
                         ";
                         $do = $this->pdo->prepare($stmt);
                         $charName = explode("=>", $var['titles'])[0];
@@ -237,21 +377,19 @@
                             $currentInv['dream_rot'],
                             $charJob,
                             $charJobLevel,
-                            $charExp
+                            $charExp,
+                            $oldCharId
                         ]);
                         // Verify insertion.
-                        $stmt = "SELECT * FROM characters WHERE name = ?";
+                        $stmt = "SELECT * FROM characters WHERE old_id = ?";
                         $do = $this->pdo->prepare($stmt);
-                        $do->execute([$charName]);
+                        $do->execute([$oldCharId]);
                         $do = $do->fetch(PDO::FETCH_ASSOC);
                         $id = $do['id'];
                         $charName = $do['name'];
 
                         // Import inventory.
-                        $stmt = "INSERT INTO main_inventory (char_id) VALUES (?)";
-                        $do = $this->pdo->prepare($stmt);
-                        $do->execute([$id]);
-                        $stmt = "SELECT * FROM main_inventory WHERE char_id = ?";
+                        $stmt = "SELECT bag FROM characters WHERE id = ?";
                         $do = $this->pdo->prepare($stmt);
                         $do->execute([$id]);
                         $main_inventory = $do->fetch(PDO::FETCH_ASSOC);
@@ -282,13 +420,14 @@
                             }
                             $bag[$x]['id'] = $deets[0];
                             $bag[$x]['amount'] = $deets[1];
+                            $bag[$x]['gear_instance'] = $this->importGearInstanceCreate($deets[0],$id);
                             ++$x;
                         }
                         $bag = json_encode($bag);
-                        $stmt = "UPDATE main_inventory SET bag = ?, money = ? WHERE char_id = ?";
+                        $stmt = "UPDATE characters SET bag = ?, money = ? WHERE id = ?";
                         $do = $this->pdo->prepare($stmt);
                         $do->execute([$bag, $money, $id]);
-                        $stmt = "SELECT bag FROM main_inventory WHERE char_id = ?";
+                        $stmt = "SELECT bag FROM characters WHERE id = ?";
                         $do = $this->pdo->prepare($stmt);
                         $do->execute([$id]);
                         $isMatch = $do->fetch(PDO::FETCH_ASSOC);
@@ -318,7 +457,7 @@
                         unset($bag);
                         $stmt = "INSERT INTO personal_vault (char_id,item_id,amount) VALUES (?,?,?)";
                         $do = $this->pdo->prepare($stmt);
-                        if(array_key_exists($oldCharId, $personalVaults))
+                        if(!empty($personalVaults) and array_key_exists($oldCharId, $personalVaults))
                         {
                             $v = $personalVaults[$oldCharId];
                             foreach($v as $deets)
