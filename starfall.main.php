@@ -7,7 +7,7 @@
     header('Content-type: text/plain');
     define('__ROOT__', dirname(__FILE__));
     define('__DATABASE__', dirname(dirname(__FILE__)));
-    define('debug', true);
+    define('debug', false);
     require_once(__DATABASE__ . '/database.php');
     require_once(__ROOT__ . '/global.functions.php');
     $starfall = starfallConnect();
@@ -20,19 +20,21 @@
     spl_autoload_register(function ($name) {
         include __ROOT__ . '/classes/' . $name . '.class.php';
     });
-    if(!debug)
+    $headers = apache_request_headers();
+    if(!isset($headers['X-Secondlife-Owner-Key']) or empty($headers['X-Secondlife-Owner-Key']))
     {
-        $user = array(
-            'username' => $headers["X-SecondLife-Owner-Name"],
-            'uuid' => $headers["X-SecondLife-Owner-Key"]
-        );
+        exit("err:No owner key defined.");
     }
-    else
-    {
-        $user = array(
-            'username' => $_GET['usr'],
-            'uuid' => $_GET['uuid']
-        );
-    }
+    $user = array(
+        'username' => $headers["X-Secondlife-Owner-Name"],
+        'uuid' => $headers["X-Secondlife-Owner-Key"]
+    );
     $character = new character($starfall, $user);
+    $var = $_POST; // Put the POST data in the new array.
+    if(isset($var['boot']))
+    {
+        // Perform the boot function.
+        echo $character->boot();
+        echo "test";
+    }
 ?>

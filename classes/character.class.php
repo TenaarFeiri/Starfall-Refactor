@@ -1,19 +1,33 @@
 <?php
-
     class character
     {
+        private $separator = "§§";
         private $pdo;
         private $user;
         private $player;
+        public static $settings;
         function __construct($pdo, array $user)
         {
             $this->pdo = $pdo;
+            self::$settings = $this->getSettings();
+            if(debug)
+            {
+                print_r(self::$settings);
+            }
+            if(self::$settings['maintenance'] != "0")
+            {
+                exit("err:Server is currently in maintenance mode. We apologise for the disruption.");
+            }
             $this->user = $user;
             $this->player = $this->checkUserExists();
             if(!$this->player)
             {
                 // Perform the import here, then fetch relevant data into a var in case we're doing something.
                 $this->player = $this->importFromOldDatabase();
+                if(!$this->player)
+                {
+                    exit("err:An error has occurred; could not successfully import your old data to the new server. Please contact staff.");
+                }
             }
             $this->updateUsername();
             $this->lastActive();
@@ -23,6 +37,76 @@
                 print_r($this->user);
                 print_r($this->player);
             }
+        }
+
+        function checkForbidden($data)
+        {
+            if(preg_match('/[§]/', $data))
+            {
+                return str_replace('§',"",$data);
+            }
+            return $data;
+        }
+
+        function boot()
+        {
+            if($this->player['loaded'] == "0")
+            {
+                // Return "noloaded" to the RP tool to ask user if they want to load or create a character.
+                return "noloaded" . $this->hasChars();
+            }
+            // Otherwise load a character.
+        }
+
+        function hasChars()
+        {
+            $stmt = "SELECT id FROM characters WHERE owner = ? LIMIT 1";
+            $do = $this->pdo->prepare($stmt);
+            try
+            {
+                $do->execute([$this->player['id']]);
+                $do = $do->fetch(PDO::FETCH_ASSOC);
+                if(!$do)
+                {
+                    return ",nochars";
+                }
+            }
+            catch(PDOException $e)
+            {
+                exit("err:Could not execute hasChars() statement." . PHP_EOL . $e->getMessage());
+            }
+        }
+
+        function browseCharacters($page)
+        {
+            $first;
+			$last = 9;
+			if($page === 1) {
+				$first = 0;
+			} else {
+				$first = 9 * $page - 9;
+			}
+			$statement = "
+				SELECT * FROM rp_tool_character_repository WHERE (user_id = :id AND deleted = 0) ORDER BY character_id ASC LIMIT $firstNum, $lastNum
+			";
+        }
+
+        function getSettings()
+        {
+            $stmt = "SELECT var,value FROM settings";
+            $do = $this->pdo->prepare($stmt);
+            $do->execute();
+            $do = $do->fetchAll(PDO::FETCH_ASSOC);
+            if(!$do)
+            {
+                return false;
+            }
+            $out;
+            foreach($do as $v)
+            {
+                $out[$v['var']] = $v['value'];
+            }
+            return $out;
         }
 
         function makeUuid($data = null) {
@@ -118,7 +202,10 @@
         function importGearInstanceCreate($gearId, $owner) // This is *only* used for creating new instances during import.
         {
             $gearData = $this->getItemData(array($gearId));
-            print_r($gearData);
+            if(debug)
+            {
+                print_r($gearData);
+            }
             if($gearData[$gearId]['equipable'] == "1")
             {
                 $itemUuid = $this->makeUuid();
@@ -363,7 +450,7 @@
                         (?,?,?,default,?,?,?,?,?,?,?)
                         ";
                         $do = $this->pdo->prepare($stmt);
-                        $charName = explode("=>", $var['titles'])[0];
+                        $charName = $this->checkForbidden(explode("=>", $var['titles'])[0]);
                         if(debug)
                         {
                             echo PHP_EOL , PHP_EOL , "::INVENTORY IN LOOP ({$charName}, ID: {$oldCharId})::" , PHP_EOL , PHP_EOL;
@@ -407,9 +494,7 @@
                                 $currentInv[] = $deets;
                             }
                         }
-                        print_r($currentInv);
                         $bag = json_decode($main_inventory['bag'], true, 3);
-                        print_r($bag);
                         $x = 1;
                         foreach($currentInv as $deets)
                         {
@@ -483,6 +568,7 @@
                 $this->pdo->rollBack();
                 exit("err:" . $e->getMessage());
             }
+            return $this->checkUserExists();
         }
     }
 
