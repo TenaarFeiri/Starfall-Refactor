@@ -7,7 +7,7 @@
     header('Content-type: text/plain');
     define('__ROOT__', dirname(__FILE__));
     define('__DATABASE__', dirname(dirname(__FILE__)));
-    define('debug', false);
+    define('debug', true);
     require_once(__DATABASE__ . '/database.php');
     require_once(__ROOT__ . '/global.functions.php');
     $starfall = starfallConnect();
@@ -31,10 +31,16 @@
     );
     $character = new character($starfall, $user);
     $var = $_POST; // Put the POST data in the new array.
-    if(isset($var['boot']))
+    if(isset($var['updateUrl']))
+    {
+        $character->updateUrl($var['var'], $var['target']);
+        echo PHP_EOL , "updateUrl";
+    }
+    else if(isset($var['boot']))
     {
         // Perform the boot function.
         echo $character->boot();
         echo "test";
     }
+    
 ?>

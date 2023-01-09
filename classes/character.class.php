@@ -39,6 +39,84 @@
             }
         }
 
+        function postToHud($data)
+        {
+            $curl = curl_init();
+            curl_setopt($curl, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
+            curl_setopt($curl, CURLOPT_ENCODING,"");
+            curl_setopt($curl, CURLOPT_POST, true);
+            curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
+            curl_setopt($curl, CURLOPT_ENCODING,"");
+            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 0);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 0);
+            curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3); // How long to wait to connect in seconds.
+            curl_setopt($curl, CURLOPT_TIMEOUT, 3); // Timeout after X seconds.
+            curl_setopt($curl, CURLOPT_URL, $this->player['hud_url']);
+            $response = curl_exec($curl);
+            curl_close($curl);
+            if(!$response)
+            {
+                exit("err:Could not post data to HUD for some reason. Contact admin.");
+            }
+        }
+
+        function postToTitler($data)
+        {
+            $curl = curl_init();
+            curl_setopt($curl, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
+            curl_setopt($curl, CURLOPT_ENCODING,"");
+            curl_setopt($curl, CURLOPT_POST, true);
+            curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
+            curl_setopt($curl, CURLOPT_ENCODING,"");
+            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 0);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 0);
+            curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3); // How long to wait to connect in seconds.
+            curl_setopt($curl, CURLOPT_TIMEOUT, 3); // Timeout after X seconds.
+            curl_setopt($curl, CURLOPT_URL, $this->player['titler_url']);
+            $response = curl_exec($curl);
+            curl_close($curl);
+            if(!$response)
+            {
+                exit("err:Could not post data to Titler for some reason. Contact admin.");
+            }
+        }
+
+        function updateUrl($url, $target)
+        {
+            $stmt = "";
+            if($target == "hud")
+            {
+                $stmt = "UPDATE players SET hud_url = :url WHERE uuid = :uuid AND id = :id";
+            }
+            else if($target == "titler")
+            {
+                $stmt = "UPDATE players SET titler_url = :url WHERE uuid = :uuid AND id = :id";
+            }
+            if($stmt == "")
+            {
+                exit("err:No stmt defined.");
+            }
+            $this->pdo->beginTransaction();
+            try
+            {
+                $do = $this->pdo->prepare($stmt);
+                $do->bindParam(":url", $url);
+                $do->bindParam(":uuid", $this->player['uuid']);
+                $do->bindParam(":id", $this->player['id']);
+                $do->execute();
+            }
+            catch(PDOException $e)
+            {
+                $this->pdo->rollBack();
+                exit("err:Could not update $target with $url");
+            }
+            $this->pdo->commit();
+            $this->player = $this->checkUserExists(); // Update player deets!
+            $this->postToHud($this->boot());
+        }
+
         function checkForbidden($data)
         {
             if(preg_match('/[§]/', $data))
@@ -199,7 +277,7 @@
             return $out;
         }
 
-        function importGearInstanceCreate($gearId, $owner) // This is *only* used for creating new instances during import.
+        function importGearInstanceCreate($gearId, $owner) // Creates a new instance of gear piece if it does not exist.
         {
             $gearData = $this->getItemData(array($gearId));
             if(debug)
